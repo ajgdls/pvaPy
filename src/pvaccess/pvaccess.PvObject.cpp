@@ -87,6 +87,8 @@ class_<PvObject>("PvObject",
     "\n\n", 
     init<boost::python::dict>(args("structureDict")))
 
+    .def(init<boost::python::dict,const std::string &>(args("structureDict","typeId")))
+
     .def(init<boost::python::dict,boost::python::dict>(args("structureDict","valueDict")))
 
     .def_pickle(PvObjectPickleSuite())

@@ -25,6 +25,7 @@ void checkFieldExists(const std::string& fieldName, const epics::pvData::PVStruc
     }
 }
 
+
 void checkFieldPathExists(const std::string& fieldPath, const epics::pvData::PVStructurePtr& pvStructurePtr)
 {
     std::vector<std::string> fieldNames = StringUtility::split(fieldPath);
@@ -1477,7 +1478,7 @@ epics::pvData::StructureConstPtr createStructureFromDict(const boost::python::di
 {
     epics::pvData::FieldConstPtrArray fields;
     epics::pvData::StringArray names;
-    updateFieldArrayFromDict(pyDict, fields, names);
+    updateFieldArrayFromDictAndId(pyDict, structureId, fields, names);
 
     std::string structureName = StringUtility::trim(structureId);
     if (structureName.length()) {
@@ -1490,7 +1491,7 @@ epics::pvData::UnionConstPtr createUnionFromDict(const boost::python::dict& pyDi
 {
     epics::pvData::FieldConstPtrArray fields;
     epics::pvData::StringArray names;
-    updateFieldArrayFromDict(pyDict, fields, names);
+    updateFieldArrayFromDict(pyDict, structureId, fields, names);
 
     std::string structureName = StringUtility::trim(structureId);
     if (structureName.length()) {
@@ -1498,6 +1499,7 @@ epics::pvData::UnionConstPtr createUnionFromDict(const boost::python::dict& pyDi
     }
     return epics::pvData::getFieldCreate()->createUnion(names, fields);
 }
+
 
 void updateFieldArrayFromDict(const boost::python::dict& pyDict, epics::pvData::FieldConstPtrArray& fields, epics::pvData::StringArray& names)
 {
@@ -1533,7 +1535,7 @@ void updateFieldArrayFromDict(const boost::python::dict& pyDict, epics::pvData::
             if (updateFieldArrayFromIntList(pyList[0], fieldName, fields, names)) {
                 continue;
             }   
-            
+
             // [()] => UnionArray
             if (updateFieldArrayFromTupleList(pyList[0], fieldName, fields, names)) {
                 continue;
@@ -1548,7 +1550,6 @@ void updateFieldArrayFromDict(const boost::python::dict& pyDict, epics::pvData::
             if (updateFieldArrayFromPvObjectList(pyList[0], fieldName, fields, names)) {
                 continue;
             }
-
             // Invalid request.
             throw InvalidArgument("Unrecognized list type for field name %s", fieldName.c_str());
         } 
@@ -1560,6 +1561,80 @@ void updateFieldArrayFromDict(const boost::python::dict& pyDict, epics::pvData::
 
         // Check for dict: {} => Structure
         if (updateFieldArrayFromDict(valueObject, fieldName, fields, names)) {
+            continue;
+        }
+
+        // Check for PvObject: PvObject => Structure
+        if (updateFieldArrayFromPvObject(valueObject, fieldName, fields, names)) {
+            continue;
+        }
+
+        // Invalid request.
+        throw InvalidArgument("Unrecognized structure type for field name %s", fieldName.c_str());
+    }
+}
+
+
+void updateFieldArrayFromDictAndId(const boost::python::dict& pyDict, const std::string& typeId, epics::pvData::FieldConstPtrArray& fields, epics::pvData::StringArray& names)
+{
+    boost::python::list fieldNames = pyDict.keys();
+    for (int i = 0; i < boost::python::len(fieldNames); i++) {
+        boost::python::object fieldNameObject = fieldNames[i];
+        boost::python::extract<std::string> fieldNameExtract(fieldNameObject);
+        std::string fieldName;
+        if (fieldNameExtract.check()) {
+            fieldName = fieldNameExtract();
+        }
+        else {
+            throw InvalidArgument("Dictionary key is used as field name and must be a string");
+        }
+
+        // Check for Scalar
+        boost::python::object valueObject = pyDict[fieldNameObject];
+        if (updateFieldArrayFromInt(valueObject, fieldName, fields, names)) {
+            continue;
+        }
+
+        // Check for list: []
+        // Type of the first element in the list will determine PV list type
+        boost::python::extract<boost::python::list> listExtract(valueObject);
+        if (listExtract.check()) {
+            boost::python::list pyList = listExtract();
+            int listSize = boost::python::len(pyList);
+            if (listSize != 1) {
+                throw InvalidArgument("PV type list provided for field name %s must have exactly one element.", fieldName.c_str());
+            }
+
+            // [Scalar] => ScalarArray
+            if (updateFieldArrayFromIntList(pyList[0], fieldName, fields, names)) {
+                continue;
+            }   
+
+            // [()] => UnionArray
+            if (updateFieldArrayFromTupleList(pyList[0], fieldName, fields, names)) {
+                continue;
+            }   
+
+            // [{}] => StructureArray
+            if (updateFieldArrayFromDictList(pyList[0], fieldName, fields, names)) {
+                continue;
+            }   
+
+            // [PvObject] => StructureArray
+            if (updateFieldArrayFromPvObjectList(pyList[0], fieldName, fields, names)) {
+                continue;
+            }
+            // Invalid request.
+            throw InvalidArgument("Unrecognized list type for field name %s", fieldName.c_str());
+        } 
+
+        // Check for tuple: () => Union
+        if (updateFieldArrayFromTuple(valueObject, fieldName, fields, names)) {
+            continue;
+        }
+
+        // Check for dict: {} => Structure
+        if (updateFieldArrayFromDictAndId(valueObject, fieldName, typeId, fields, names)) {
             continue;
         }
 
@@ -1621,6 +1696,12 @@ void addScalarArrayField(const std::string& fieldName, epics::pvData::ScalarType
 void addStructureField(const std::string& fieldName, const boost::python::dict& pyDict, epics::pvData::FieldConstPtrArray& fields, epics::pvData::StringArray& names)
 {
     fields.push_back(createStructureFromDict(pyDict));
+    names.push_back(fieldName);
+}
+
+void addStructureField(const std::string& fieldName, const boost::python::dict& pyDict, const std::string& typeId, epics::pvData::FieldConstPtrArray& fields, epics::pvData::StringArray& names)
+{
+    fields.push_back(createStructureFromDict(pyDict, typeId));
     names.push_back(fieldName);
 }
 
@@ -1692,7 +1773,23 @@ bool updateFieldArrayFromDict(const boost::python::object& pyObject, const std::
     if (!dictSize) {
         throw InvalidArgument("PV type dict provided for field name %s must be non-empty.", fieldName.c_str());
     }
-    addStructureField(fieldName, pyDict2, fields, names);
+    addStructureField(fieldName, pyDict2, "xxx", fields, names);
+    return true;
+}
+
+bool updateFieldArrayFromDictAndId(const boost::python::object& pyObject, const std::string& fieldName, const std::string& typeId, epics::pvData::FieldConstPtrArray& fields, epics::pvData::StringArray& names)
+{
+    boost::python::extract<boost::python::dict> dictExtract(pyObject);
+    if (!dictExtract.check()) {
+        return false;
+    }
+
+    boost::python::dict pyDict2 = dictExtract();
+    int dictSize = boost::python::len(pyDict2);
+    if (!dictSize) {
+        throw InvalidArgument("PV type dict provided for field name %s must be non-empty.", fieldName.c_str());
+    }
+    addStructureField(fieldName, pyDict2, typeId, fields, names);
     return true;
 }
 
@@ -1806,7 +1903,7 @@ bool updateFieldArrayFromPvObject(const boost::python::object& pyObject, const s
             break;
         }
         default: {
-            addStructureField(fieldName, pyDict2, fields, names);
+            addStructureField(fieldName, pyDict2, pvObject.getPvStructurePtr()->getStructure()->getID(), fields, names);
         }
     }
     return true;
